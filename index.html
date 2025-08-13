@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>NZ Property AR — No Key</title>
+  <title>NZ Property AR — LINZ Property Boundaries (122657)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <!-- A-Frame + AR.js (GPS) -->
   <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
@@ -23,7 +23,7 @@
     <button id="btnClear" style="background:#666">Clear</button>
   </div>
 
-  <!-- AR scene (GPS camera) -->
+  <!-- AR scene (GPS) -->
   <a-scene
     renderer="alpha: true; antialias: true"
     vr-mode-ui="enabled: false"
@@ -37,34 +37,36 @@
   <div class="hint">Open via HTTPS • Allow Camera & Location • Move slowly to initialize</div>
 
   <script>
-    // ---- styles for outline ----
+    // ===== CONFIG =====
+    const LDS_KEY = "YOUR_LDS_KEY_HERE";        // <-- put your LINZ LDS key here
+    const PARCEL_LAYER = "layer-122657";        // NZ Property Boundaries (LINZ dataset you linked)
+
+    // Outline style
     const EDGE_COLOR = "#ffd60a";
     const DOT_RADIUS = 0.06;   // ~12 cm
-    const DOT_LIFT   = 0.12;   // lift dots above ground
-    const DENSITY_M  = 2.5;    // ~one dot every 2.5 m
+    const DOT_LIFT   = 0.12;   // lift dots a bit off the ground
+    const DENSITY_M  = 2.5;    // ~1 dot every 2.5 m
 
-    // UI events
+    // UI
     document.getElementById('btnSearch').addEventListener('click', searchAndDraw);
     document.getElementById('btnClear').addEventListener('click', () => {
       document.querySelectorAll('[data-parcel],[data-geocode]').forEach(el => el.remove());
     });
 
-    // ---- helper: Haversine distance (meters) ----
+    // Haversine distance (m)
     function distM(lon1, lat1, lon2, lat2) {
-      const R = 6371000;
-      const toRad = d => d * Math.PI/180;
-      const dLat = toRad(lat2-lat1);
-      const dLon = toRad(lon2-lon1);
+      const R = 6371000, toRad = d => d * Math.PI/180;
+      const dLat = toRad(lat2-lat1), dLon = toRad(lon2-lon1);
       const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
       return 2*R*Math.asin(Math.sqrt(a));
     }
 
-    // ---- draw: downsample a ring of [lon,lat] into evenly spaced GPS dots ----
+    // Downsample ring of [lon,lat] → dotted outline
     function addOutlineFromRing(root, ringLonLat) {
       if (!ringLonLat || ringLonLat.length < 2) return;
       const pts = ringLonLat.slice();
       const first = pts[0], last = pts[pts.length-1];
-      if (first[0] !== last[0] || first[1] !== last[1]) pts.push(first); // close ring
+      if (first[0] !== last[0] || first[1] !== last[1]) pts.push(first); // close
 
       for (let i=1; i<pts.length; i++){
         const a = pts[i-1], b = pts[i];
@@ -85,7 +87,11 @@
       }
     }
 
-    // ---- geocode via LINZ Geosearch (ArcGIS) → lon/lat (WGS84) ----
+    function clearOld() {
+      document.querySelectorAll('[data-parcel],[data-geocode]').forEach(el => el.remove());
+    }
+
+    // LINZ Geosearch (ArcGIS) → lon/lat
     async function geocodeNZ(address) {
       const url = 'https://services.arcgisonline.co.nz/arcgis/rest/services/LINZ/geosearch/GeocodeServer/findAddressCandidates'
                 + '?f=json&outFields=*&outSR=4326&SingleLine=' + encodeURIComponent(address);
@@ -97,33 +103,25 @@
       return { lon: c.location.x, lat: c.location.y, address: c.address };
     }
 
-    // ---- fetch parcel via LINZ ArcGIS FeatureServer (no API key) ----
+    // LINZ WFS: query Property Boundaries (122657) using small bbox around point
     async function fetchParcelAt(lon, lat) {
-      // search radius in meters; will widen if needed
-      for (const distance of [60, 100, 160]) {
-        const url = "https://services.arcgis.com/xdsHIIxuCWByZiCB/arcgis/rest/services/LINZ_NZ_Primary_Parcels/FeatureServer/0/query"
-          + "?f=geojson"
-          + "&outSR=4326"
-          + "&spatialRel=esriSpatialRelIntersects"
-          + "&geometryType=esriGeometryPoint"
-          + `&geometry={"x":${lon},"y":${lat},"spatialReference":{"wkid":4326}}`
-          + "&inSR=4326"
-          + `&distance=${distance}`
-          + "&units=esriSRUnit_Meter"
-          + "&outFields=*";
-
+      for (const d of [0.0003, 0.0006, 0.0012]) { // ~30m, 60m, 120m
+        const bbox = `${lon-d},${lat-d},${lon+d},${lat+d},EPSG:4326`;
+        const url = `https://data.linz.govt.nz/services;key=${encodeURIComponent(LDS_KEY)}/wfs`
+          + `?service=WFS&version=2.0.0&request=GetFeature&typeNames=${encodeURIComponent(PARCEL_LAYER)}`
+          + `&outputFormat=application/json&count=1&bbox=${bbox}`;
         const res = await fetch(url);
         if (!res.ok) continue;
         const gj = await res.json();
         if (gj.features && gj.features.length > 0) return gj.features[0];
       }
-      throw new Error("No parcel found near that point.");
+      throw new Error("No boundary found near that point.");
     }
 
-    // ---- draw feature (Polygon or MultiPolygon) as outline-only ----
+    // Draw Polygon/MultiPolygon outline
     function drawGeoJSONPolygon(feature) {
       const geom = feature.geometry;
-      if (!geom) throw new Error("No geometry in parcel feature.");
+      if (!geom) throw new Error("No geometry in boundary feature.");
       const root = document.getElementById('root');
       if (geom.type === "Polygon") {
         geom.coordinates.forEach(r => addOutlineFromRing(root, r));
@@ -134,23 +132,17 @@
       }
     }
 
-    // ---- main flow: search → geocode → parcel → draw + marker ----
+    // search → geocode → WFS → draw
     async function searchAndDraw() {
       const q = document.getElementById('addr').value.trim();
       if (!q) return;
       try {
-        // clear previous
-        document.querySelectorAll('[data-parcel],[data-geocode]').forEach(el => el.remove());
-
-        // geocode
+        clearOld();
         const pt = await geocodeNZ(q);
-        console.log("Geocoded:", pt);
-
-        // parcel
         const feature = await fetchParcelAt(pt.lon, pt.lat);
         drawGeoJSONPolygon(feature);
 
-        // magenta marker at geocode point
+        // magenta marker at geocoded point
         const root = document.getElementById('root');
         const pin = document.createElement('a-box');
         pin.setAttribute('gps-entity-place', `latitude: ${pt.lat}; longitude: ${pt.lon};`);
@@ -159,10 +151,9 @@
         pin.setAttribute('position', '0 0.25 0');
         pin.setAttribute('data-geocode','1');
         root.appendChild(pin);
-
       } catch (e) {
         console.error(e);
-        alert(e.message || "Search or parcel fetch failed.");
+        alert(e.message || "Search or boundary fetch failed.");
       }
     }
   </script>
